@@ -11,26 +11,52 @@ enum Category {
   Other
 }
 
-// params: [{"width": 100, "height": 100, "base64": "", "name": "a", "username": "user1", "category": 0}]
+const unitMap = {
+  'none': '0',
+  'None': '0',
+  'wei': '1',
+  'kwei': '1000',
+  'mwei': '1000000',
+  'gwei': '1000000000',
+  'nas': '1000000000000000000',
+}
+
+function unitValue(unit) {
+  unit = unit ? unit.toLowerCase() : 'nas'
+  const unitValue = unitMap[ unit ]
+
+  if (unitValue === undefined) {
+    throw new Error(`The unit ${unit} does not exist, please use the following units: ${JSON.stringify(unitMap, null, 2)}`)
+  }
+
+  return new BigNumber(unitValue, 10)
+}
+
+function toBasic(value, unit: string) {
+  return value.mul(unitValue(unit))
+}
+
+function fromBasic(value, unit: string) {
+  return value.div(unitValue(unit))
+}
 
 class Image {
   public width: number
   public height: number
-  public base64: string
   public name: string
-  public username: string
+  public author: string
+  public url: string
   public category: Category
 
-  // TODO: More!
   constructor(json?: string) {
     if (json) {
-      const object = JSON.parse(json)
+      const object: ImageObject = JSON.parse(json)
 
       this.width = object.width
       this.height = object.height
-      this.base64 = object.base64
+      this.url = object.url
       this.name = object.name
-      this.username = object.username
+      this.author = object.author
       this.category = object.category
     }
   }
@@ -43,59 +69,136 @@ class Image {
 interface ImageObject {
   width: number
   height: number
-  base64: string
   name: string
-  username: string
+  author: string
+  url: string
   category: Category
+}
+
+class Upload {
+  public value
+
+  constructor(json: string) {
+    if (json) {
+      const object = JSON.parse(json)
+
+      this.value = object.value
+    }
+  }
+
+  toString() {
+    return JSON.stringify(this)
+  }
 }
 
 class ImgCubeContract {
   images
   imageCount
+  nextUploads
 
   constructor() {
-    LocalContractStorage.defineMapProperty(this, "images", {
-      parse: function (json) {
-        return new Image(json);
+    LocalContractStorage.defineMapProperty(this, 'images', {
+      parse(json) {
+        return new Image(json)
       },
-      stringify: function (object) {
-        return object.toString();
+      stringify(object) {
+        return object.toString()
       }
-    });
+    })
 
-    LocalContractStorage.defineProperty(this, "imageCount", null)
+    LocalContractStorage.defineMapProperty(this, 'nextUploads', {
+      parse(json) {
+        return new Upload(json)
+      },
+      stringify(object) {
+        return object.toString()
+      }
+    })
+
+    LocalContractStorage.defineProperty(this, 'imageCount', null)
   }
 
   init() {
     this.imageCount = 0
   }
 
-  upload(image: ImageObject): boolean {
-    const price = new BigNumber(image.width * image.height).div(2000000).mul(1000000000000000000)
-    const sent = new BigNumber(Blockchain.transaction.value)
+  payUpload(): boolean {
+    if (this.nextUploads.get(Blockchain.transaction.from)) {
+      const upload: Upload = this.nextUploads.get(Blockchain.transaction.from)
 
-    console.warn(price)
-    console.warn(sent)
+      Blockchain.transfer(Blockchain.transaction.from, upload.value)
 
-    if (sent.lt(price)) {
-      throw new Error(`Not enough NAS sent (${price.div(1000000000000000000)} expected, ${Blockchain.transaction.value.div(1000000000000000000)} sent).`)
+      this.nextUploads.del(Blockchain.transaction.from)
     }
 
-    this.images.set(this.imageCount, new Image(JSON.stringify(image)))
-    this.imageCount++
+    this.nextUploads.set(Blockchain.transaction.from, new Upload(JSON.stringify({
+      value: Blockchain.transaction.value
+    })))
 
     return true
   }
 
-  get(name: string) {
-    return this.images.get(name)
+  returnPaidUpload(): boolean {
+    const upload: Upload = this.nextUploads.get(Blockchain.transaction.from)
+
+    if (upload) {
+      Blockchain.transfer(Blockchain.transaction.from, upload.value)
+      this.nextUploads.del(Blockchain.transaction.from)
+    }
+
+    return true
   }
 
-  query(count: number, category?: Category) {
-    let images: Image[] = []
+  upload(rawImages: ImageObject[]): boolean {
+    const value = new BigNumber(this.nextUploads.get(Blockchain.transaction.from).value)
 
-    for (let i = 0; i < count; i++) {
-      const image = this.images.get(this.imageCount - count + i)
+    let price = new BigNumber(0)
+
+    for (const rawImage of rawImages) {
+      price = price.plus(toBasic(new BigNumber(new BigNumber(rawImage.width * rawImage.height).div(18300000).toFixed(18)), 'nas'))
+
+      const image = new Image(JSON.stringify(rawImage))
+
+      this.images.set(this.imageCount, image)
+      this.imageCount++
+    }
+
+    if (value.lt(price)) {
+      throw new Error(`Not enough NAS sent (${fromBasic(price, 'nas')} expected, ${fromBasic(value, 'nas')} sent).`)
+    }
+
+    this.nextUploads.del(Blockchain.transaction.from)
+
+    return true
+  }
+
+  clear(): boolean {
+    for (let i = 0; i < this.imageCount; i++) {
+      this.images.del(i)
+    }
+
+    return true
+  }
+
+  delete(id: string): boolean {
+    this.images.del(id)
+
+    return true
+  }
+
+  get(id: string) {
+    return this.images.get(id)
+  }
+
+  getImageCount() {
+    return this.imageCount
+  }
+
+  query(count: number, offset: number = 0, category?: Category) {
+    const images: Image[] = []
+
+    for (let i = offset; i < offset + count; i++) {
+      const image = this.images.get(this.imageCount - count + i - 1)
 
       if (!image) {
         continue
@@ -110,69 +213,6 @@ class ImgCubeContract {
 
     return images
   }
-/*
-  save(height) {
-    const from = Blockchain.transaction.from
-    const value = Blockchain.transaction.value
-    const blockHeight = Blockchain.block.height
-
-    const originalDeposit = this.bankVault.get(from)
-
-    if (originalDeposit) {
-      value.plus(originalDeposit)
-    }
-
-    const deposit = new Deposit()
-
-    deposit.balance = value
-    deposit.expiryHeight = blockHeight.plus(height)
-  }
-
-  takeOut(value) {
-    const from = Blockchain.transaction.from
-    const amount = new BigNumber(value)
-    const blockHeight = Blockchain.block.height
-
-    const deposit = this.bankVault.get(from)
-
-    if (!deposit) {
-      throw new Error("No deposit found.")
-    }
-
-    if (blockHeight.lt(deposit.expiryHeight)) {
-      throw new Error("Cannot take out before expiryHeight.")
-    }
-
-    if (amount.gt(deposit.balance)) {
-      throw new Error("Cannout take out more than deposited.")
-    }
-
-    const result = Blockchain.transfer(from, amount)
-
-    if (!result) {
-      throw new Error("Transfer failed.")
-    }
-
-    Event.Trigger("BankVault", {
-      transfer: {
-        from: Blockchain.transaction.to,
-        to: from,
-        value: amount
-      }
-    })
-
-    deposit.balance = deposit.balance.sub(amount)
-
-    this.bankVault.put(from, deposit)
-  }
-
-  balanceOf() {
-    return this.bankVault.get(Blockchain.transaction.from)
-  }
-
-  verifyAddress(address) {
-    return Blockchain.verifyAddress(address) == 1
-  }*/
 }
 
 export = ImgCubeContract
