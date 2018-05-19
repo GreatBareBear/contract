@@ -1,14 +1,17 @@
 let Blockchain, LocalContractStorage, Event, BigNumber
 
 enum Category {
-  Cats = 0,
-  Dogs,
-  Memes,
-  Burgers,
-  Cartoons,
-  Fun,
-  Art,
-  Other
+  all = 0,
+  crypto,
+  dogs,
+  cute,
+  memes,
+  programming,
+  games,
+  cars,
+  art,
+  fun,
+  other
 }
 
 const unitMap = {
@@ -144,9 +147,11 @@ class ImgCubeContract {
     if (upload) {
       Blockchain.transfer(Blockchain.transaction.from, upload.value)
       this.nextUploads.del(Blockchain.transaction.from)
+
+      return true
     }
 
-    return true
+    return false
   }
 
   upload(rawImages: ImageObject[]): boolean {
@@ -177,11 +182,14 @@ class ImgCubeContract {
       this.images.del(i)
     }
 
+    this.imageCount = 0
+
     return true
   }
 
   delete(id: string): boolean {
     this.images.del(id)
+    this.imageCount--
 
     return true
   }
@@ -194,19 +202,17 @@ class ImgCubeContract {
     return this.imageCount
   }
 
-  query(count: number, offset: number = 0, category?: Category) {
-    const images: Image[] = []
+  query(count, offset = 0, category = 0) {
+    const images = []
 
-    for (let i = offset; i < offset + count; i++) {
-      const image = this.images.get(this.imageCount - count + i - 1)
+    for (let i = offset + 1; i < offset + count + 1; i++) {
+      const image = this.images[i - 1]
 
       if (!image) {
         continue
       }
 
-      if (category !== undefined && image.category === category) {
-        images.push(image)
-      } else if (category === undefined) {
+      if (image.category === category || category === 0) {
         images.push(image)
       }
     }
