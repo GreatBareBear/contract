@@ -1,8 +1,7 @@
 let Blockchain, LocalContractStorage, Event, BigNumber
 
 enum Category {
-  all = 0,
-  crypto,
+  crypto = 0,
   dogs,
   cute,
   memes,
