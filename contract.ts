@@ -41,6 +41,7 @@ function fromBasic(value, unit: string) {
 }
 
 class Image {
+  public id: number
   public width: number
   public height: number
   public name: string
@@ -53,6 +54,7 @@ class Image {
     if (json) {
       const object: ImageObject = JSON.parse(json)
 
+      this.id = object.id
       this.width = object.width
       this.height = object.height
       this.url = object.url
@@ -69,6 +71,7 @@ class Image {
 }
 
 interface ImageObject {
+  id: number
   width: number
   height: number
   name: string
@@ -76,22 +79,6 @@ interface ImageObject {
   url: string
   category: Category
   authorAddress: Address
-}
-
-class Upload {
-  public value
-
-  constructor(json: string) {
-    if (json) {
-      const object = JSON.parse(json)
-
-      this.value = object.value
-    }
-  }
-
-  toString() {
-    return JSON.stringify(this)
-  }
 }
 
 class ImgCubeContract {
@@ -121,6 +108,7 @@ class ImgCubeContract {
   upload(rawImages: ImageObject[]): boolean {
     for (const rawImage of rawImages) {
       rawImage.authorAddress = Blockchain.transaction.from
+      rawImage.id = this.imageCount
 
       const image = new Image(JSON.stringify(rawImage))
 
