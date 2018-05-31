@@ -1,5 +1,3 @@
-let Blockchain, LocalContractStorage, Event, BigNumber
-
 enum Category {
   crypto = 0,
   dogs,
@@ -31,7 +29,7 @@ function unitValue(unit) {
     throw new Error(`The unit ${unit} does not exist, please use the following units: ${JSON.stringify(unitMap, null, 2)}`)
   }
 
-  return new BigNumber(unitValue, 10)
+  return new BigNumber(unitValue)
 }
 
 function toBasic(value, unit: string) {
@@ -49,6 +47,7 @@ class Image {
   public author: string
   public url: string
   public category: Category
+  public authorAddress: Address
 
   constructor(json?: string) {
     if (json) {
@@ -60,6 +59,7 @@ class Image {
       this.name = object.name
       this.author = object.author
       this.category = object.category
+      this.authorAddress = object.authorAddress
     }
   }
 
@@ -75,6 +75,7 @@ interface ImageObject {
   author: string
   url: string
   category: Category
+  authorAddress: Address
 }
 
 class Upload {
@@ -94,9 +95,9 @@ class Upload {
 }
 
 class ImgCubeContract {
-  images
-  imageCount
-  nextUploads
+  images: ContractStorage<Image>
+  imageCount: number
+  ownerAddress: Address
 
   constructor() {
     LocalContractStorage.defineMapProperty(this, 'images', {
@@ -108,58 +109,18 @@ class ImgCubeContract {
       }
     })
 
-    LocalContractStorage.defineMapProperty(this, 'nextUploads', {
-      parse(json) {
-        return new Upload(json)
-      },
-      stringify(object) {
-        return object.toString()
-      }
-    })
-
     LocalContractStorage.defineProperty(this, 'imageCount', null)
+    LocalContractStorage.defineProperty(this, 'ownerAddress', null)
   }
 
   init() {
     this.imageCount = 0
-  }
-
-  payUpload(): boolean {
-    if (this.nextUploads.get(Blockchain.transaction.from)) {
-      const upload: Upload = this.nextUploads.get(Blockchain.transaction.from)
-
-      Blockchain.transfer(Blockchain.transaction.from, upload.value)
-
-      this.nextUploads.del(Blockchain.transaction.from)
-    }
-
-    this.nextUploads.set(Blockchain.transaction.from, new Upload(JSON.stringify({
-      value: Blockchain.transaction.value
-    })))
-
-    return true
-  }
-
-  returnPaidUpload(): boolean {
-    const upload: Upload = this.nextUploads.get(Blockchain.transaction.from)
-
-    if (upload) {
-      Blockchain.transfer(Blockchain.transaction.from, upload.value)
-      this.nextUploads.del(Blockchain.transaction.from)
-
-      return true
-    }
-
-    return false
+    this.ownerAddress = Blockchain.transaction.from
   }
 
   upload(rawImages: ImageObject[]): boolean {
-    const value = new BigNumber(this.nextUploads.get(Blockchain.transaction.from).value)
-
-    let price = new BigNumber(0)
-
     for (const rawImage of rawImages) {
-      price = price.plus(toBasic(new BigNumber(new BigNumber(rawImage.width * rawImage.height).div(18300000).toFixed(18)), 'nas'))
+      rawImage.authorAddress = Blockchain.transaction.from
 
       const image = new Image(JSON.stringify(rawImage))
 
@@ -167,16 +128,14 @@ class ImgCubeContract {
       this.imageCount++
     }
 
-    if (value.lt(price)) {
-      throw new Error(`Not enough NAS sent (${fromBasic(price, 'nas')} expected, ${fromBasic(value, 'nas')} sent).`)
-    }
-
-    this.nextUploads.del(Blockchain.transaction.from)
-
     return true
   }
 
   clear(): boolean {
+    if (Blockchain.transaction.from !== this.ownerAddress) {
+      throw new Error('Unauthorized')
+    }
+
     for (let i = 0; i < this.imageCount; i++) {
       this.images.del(i)
     }
@@ -187,8 +146,32 @@ class ImgCubeContract {
   }
 
   delete(id: string): boolean {
-    this.images.del(id)
+    if (Blockchain.transaction.from !== this.ownerAddress) {
+      throw new Error('Unauthorized')
+    }
+
+    for (let i = parseInt(id); i < this.imageCount - 1; ++i) {
+      this.images.set(i, this.images.get(i + 1))
+    }
+
+    this.images.del(this.imageCount)
     this.imageCount--
+
+    return true
+  }
+
+  tip(id: string): boolean {
+    const image = this.images.get(id)
+
+    if (!image) {
+      throw new Error(`Image with ${id} doesn't exist.`)
+    }
+
+    if (Blockchain.transaction.value.gt(0)) {
+      Blockchain.transfer(image.authorAddress, Blockchain.transaction.value)
+    } else {
+      throw new Error(`Tip needs to be higher than 0 NAS.`)
+    }
 
     return true
   }
@@ -201,18 +184,20 @@ class ImgCubeContract {
     return this.imageCount
   }
 
-  query(count, offset = 0, category = 0) {
+  query(count, offset = 0, category?) {
     const images = []
 
-    for (let i = offset + 1; i < offset + count + 1; i++) {
-      const image = this.images[i - 1]
+    for (let i = offset; i < offset + count; i++) {
+      const image = this.images.get(i)
 
       if (!image) {
         continue
       }
 
-      if (image.category === category || category === 0) {
+      if (image.category === category || category === undefined) {
         images.push(image)
+      } else {
+        count++
       }
     }
 
